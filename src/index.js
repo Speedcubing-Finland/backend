@@ -4,8 +4,19 @@ const adminRoutes = require('./routes/admin');
 
 const app = express();
 
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173', 
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      'https://speedcubingfinland.fi',
+      'http://localhost:5173'
+    ];
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS not allowed'));
+    }
+  },
   credentials: true
 }));
 
