@@ -95,4 +95,16 @@ router.post('/reject', (req, res) => {
   }
 });
 
+
+// Endpoint to get all members (for comparison)
+router.get('/members', async (req, res) => {
+  try {
+    const [rows] = await db.execute('SELECT wca_id, email, first_name, last_name FROM members');
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Error fetching members:', err);
+    res.status(500).send('Error fetching members');
+  }
+});
+
 module.exports = router;
