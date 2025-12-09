@@ -1,43 +1,55 @@
 
 const express = require('express');
 const db = require('../db'); // Ensure the path is correct
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const verifyToken = require('../middleware/auth');
+const { submissions } = require('./public'); // Import shared submissions array
 const router = express.Router();
 
-let submissions = []; // Temporary storage for submissions
+// Login endpoint - no auth required
+router.post('/login', async (req, res) => {
+  const { username, password } = req.body;
 
-// Endpoint to handle form submissions
-router.post('/submit-member', async (req, res) => {
-    const submission = req.body;
-  
-    // Validation for required fields
-    if (!submission.firstName || !submission.lastName || !submission.city || !submission.email || !submission.birthDate) {
-      return res.status(400).send('All required fields must be filled.');
+  // Validate input
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
+  try {
+    // Check credentials against environment variables
+    if (username !== process.env.ADMIN_USERNAME) {
+      return res.status(401).json({ error: 'Invalid credentials' });
     }
-  
-    // Check for duplicate email in submissions (temporary storage)
-    const emailExistsInSubmissions = submissions.some((sub) => sub.email === submission.email);
-    if (emailExistsInSubmissions) {
-      return res.status(400).send('Sähköposti odottaa jo hyväksyntää.');
+
+    // Compare password with hashed password
+    const isValidPassword = await bcrypt.compare(password, process.env.ADMIN_PASSWORD_HASH);
+    
+    if (!isValidPassword) {
+      return res.status(401).json({ error: 'Invalid credentials' });
     }
-  
-    try {
-      // Check for duplicate email in the database
-      const query = `SELECT COUNT(*) AS count FROM members WHERE email = ?`;
-      const [results] = await db.execute(query, [submission.email]);
-      
-      if (results[0].count > 0) {
-        return res.status(400).send('Sähköposti on jo rekisteröity.');
-      }
-  
-      // Add submission to temporary storage
-      submissions.push(submission);
-      console.log('Submission received:', submission);
-      res.status(200).send('Submission received successfully');
-    } catch (err) {
-      console.error('Error checking database or handling submission:', err);
-      res.status(500).send('Error checking for duplicate email or saving submission.');
-    }
-  });
+
+    // Generate JWT token (expires in 24 hours)
+    const token = jwt.sign(
+      { username: username, role: 'admin' },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({ 
+      token,
+      username,
+      expiresIn: '24h'
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// All routes below require authentication
+router.use(verifyToken);
+
 // Endpoint to fetch all submissions
 router.get('/submissions', (req, res) => {
   res.status(200).json(submissions);

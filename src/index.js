@@ -1,6 +1,8 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const adminRoutes = require('./routes/admin');
+const { router: publicRoutes } = require('./routes/public');
 
 const app = express();
 
@@ -22,7 +24,8 @@ app.use(cors({
 
 app.use(express.json());
 
-app.use('/api', adminRoutes);
+app.use('/api', publicRoutes);
+app.use('/api/admin', adminRoutes);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
