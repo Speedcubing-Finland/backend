@@ -1,4 +1,6 @@
 .env
+generate-password-hash.js
+test-login.js
 
 # Node.js dependencies
 node_modules
