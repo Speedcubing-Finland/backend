@@ -262,7 +262,36 @@ Route handler
 Response
 ```
 
-## 📝 Notes
+## � Changing Admin Password
+
+When you need to change the admin password:
+
+**Option 1: Node.js REPL (Recommended)**
+```bash
+cd backend
+node
+```
+In Node REPL:
+```javascript
+const bcrypt = require('bcryptjs');
+bcrypt.hash('YourNewPassword123', 10).then(hash => console.log(hash));
+```
+
+**Option 2: One-Line Command**
+```bash
+node -e "require('bcryptjs').hash('NewPassword', 10).then(console.log)"
+```
+
+**Option 3: Online Tool**
+Use https://bcrypt-generator.com/ (10 rounds)
+
+**Update Credentials:**
+1. Copy the generated hash
+2. Update `ADMIN_PASSWORD_HASH` in `.env` file
+3. Update `ADMIN_PASSWORD_HASH` in Render.com environment variables
+4. Restart backend (if needed)
+
+## �📝 Notes
 
 - Submissions stored in memory (lost on restart) - consider moving to database
 - JWT tokens stored in client localStorage
