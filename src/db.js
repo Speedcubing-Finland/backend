@@ -20,6 +20,19 @@ pool.getConnection((err, connection) => {
   }
   if (connection) connection.release(); // Release the initial connection back to the pool
   console.log('Connected to the database pool');
+
+  // Debug: Log tables and pending_members contents
+  pool.promise().query('SHOW TABLES')
+    .then(([tables]) => {
+      console.log('Tables in database:', tables);
+      return pool.promise().query('SELECT * FROM pending_members LIMIT 1');
+    })
+    .then(([rows]) => {
+      console.log('First row in pending_members:', rows);
+    })
+    .catch((err) => {
+      console.error('Debug query error:', err);
+    });
 });
 
 module.exports = pool.promise(); // Export a promise-based pool

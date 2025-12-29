@@ -51,49 +51,57 @@ router.post('/login', async (req, res) => {
 // All routes below require authentication
 router.use(verifyToken);
 
-// Endpoint to fetch all submissions
-router.get('/submissions', (req, res) => {
-  res.status(200).json(submissions);
+
+// Endpoint to fetch all pending registrations from DB
+router.get('/submissions', async (req, res) => {
+  try {
+    const [rows] = await db.execute('SELECT * FROM pending_members ORDER BY submitted_at ASC');
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Error fetching pending_members:', err);
+    res.status(500).send('Error fetching pending registrations');
+  }
 });
 
-// Endpoint to approve a submission
-router.post('/approve', async (req, res) => {
-    const { index } = req.body;
-  
-    if (index < 0 || index >= submissions.length) {
-      return res.status(400).send('Invalid submission index');
-    }
-  
-    const approvedSubmission = submissions.splice(index, 1)[0];
-  
-    const checkQuery = 'SELECT COUNT(*) AS count FROM members WHERE email = ?';
-  
-    try {
-      const [rows] = await db.execute(checkQuery, [approvedSubmission.email]);
-      if (rows[0].count > 0) {
-        return res.status(400).send('This email address is already registered');
-      }
-  
-      const insertQuery = `
-        INSERT INTO members (first_name, last_name, city, email, wca_id, birth_date)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `;
-      const [result] = await db.execute(insertQuery, [
-        approvedSubmission.firstName,
-        approvedSubmission.lastName,
-        approvedSubmission.city,
-        approvedSubmission.email,
-        approvedSubmission.wcaId || null,
-        approvedSubmission.birthDate,
-      ]);
-  
-      console.log('Data saved successfully:', result);
 
-      // Send approval email (non-blocking)
+// Endpoint to approve a pending registration by id
+router.post('/approve', async (req, res) => {
+  const { id } = req.body;
+  if (!id) return res.status(400).send('Missing id');
+
+  try {
+    // Fetch the pending registration
+    const [rows] = await db.execute('SELECT * FROM pending_members WHERE id = ?', [id]);
+    if (rows.length === 0) return res.status(404).send('Pending registration not found');
+    const approvedSubmission = rows[0];
+
+    // Check for duplicate in members
+    const [dup] = await db.execute('SELECT COUNT(*) AS count FROM members WHERE email = ?', [approvedSubmission.email]);
+    if (dup[0].count > 0) return res.status(400).send('This email address is already registered');
+
+    // Insert into members
+    const insertQuery = `
+      INSERT INTO members (first_name, last_name, city, email, wca_id, birth_date)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `;
+    await db.execute(insertQuery, [
+      approvedSubmission.first_name,
+      approvedSubmission.last_name,
+      approvedSubmission.city,
+      approvedSubmission.email,
+      approvedSubmission.wca_id || null,
+      approvedSubmission.birth_date
+    ]);
+
+    // Remove from pending_members
+    await db.execute('DELETE FROM pending_members WHERE id = ?', [id]);
+
+    // (Optional) Send approval email (non-blocking)
+    if (sendRegistrationApprovedEmail) {
       sendRegistrationApprovedEmail(
         approvedSubmission.email,
-        approvedSubmission.firstName,
-        approvedSubmission.lastName
+        approvedSubmission.first_name,
+        approvedSubmission.last_name
       )
         .then(emailResult => {
           if (emailResult.success) {
@@ -103,24 +111,27 @@ router.post('/approve', async (req, res) => {
           }
         })
         .catch(err => console.error('Email send error:', err));
-
-      res.status(200).send('Submission approved successfully');
-    } catch (err) {
-      console.error('Error inserting data into the database:', err);
-      res.status(500).send('Error saving to database');
     }
-  });
 
-// Endpoint to reject a submission
-router.post('/reject', (req, res) => {
-  const { index } = req.body;
+    res.status(200).send('Submission approved successfully');
+  } catch (err) {
+    console.error('Error approving registration:', err);
+    res.status(500).send('Error approving registration');
+  }
+});
 
-  if (index >= 0 && index < submissions.length) {
-    // Remove the submission from the temporary storage
-    submissions.splice(index, 1);
+
+// Endpoint to reject a pending registration by id
+router.post('/reject', async (req, res) => {
+  const { id } = req.body;
+  if (!id) return res.status(400).send('Missing id');
+  try {
+    const [result] = await db.execute('DELETE FROM pending_members WHERE id = ?', [id]);
+    if (result.affectedRows === 0) return res.status(404).send('Pending registration not found');
     res.status(200).send('Submission rejected');
-  } else {
-    res.status(400).send('Invalid submission index');
+  } catch (err) {
+    console.error('Error rejecting registration:', err);
+    res.status(500).send('Error rejecting registration');
   }
 });
 

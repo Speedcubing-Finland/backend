@@ -1,15 +1,20 @@
 const nodemailer = require('nodemailer');
+const sgMail = require('@sendgrid/mail');
 
 // Create reusable transporter object using SMTP
 const createTransporter = () => {
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: parseInt(process.env.SMTP_PORT) || 587,
-    secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+  port: parseInt(process.env.SMTP_PORT) || 587,
+  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+  // Increase timeouts to accommodate slower network from cloud providers
+  connectionTimeout: 20000,
+  greetingTimeout: 20000,
+  socketTimeout: 20000,
   });
 };
 
@@ -160,6 +165,27 @@ Speedcubing Finland ry
 // Send email function
 const sendEmail = async (to, template, ...templateArgs) => {
   // Check if email is configured
+  // Prefer SendGrid API if configured (better reliability on Render)
+  if (process.env.SENDGRID_API_KEY) {
+    try {
+      sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+      const emailContent = emailTemplates[template](...templateArgs);
+      const msg = {
+        to,
+        from: process.env.SMTP_FROM || process.env.SENDGRID_FROM || process.env.SMTP_USER,
+        subject: emailContent.subject,
+        text: emailContent.text,
+        html: emailContent.html,
+      };
+      const result = await sgMail.send(msg);
+      console.log(`SendGrid email sent to ${to}`);
+      return { success: true, result };
+    } catch (err) {
+      console.error('SendGrid send error:', err);
+      // fallthrough to try SMTP if available
+    }
+  }
+
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER) {
     console.warn('Email not configured - skipping email send');
     return { success: false, reason: 'Email not configured' };
