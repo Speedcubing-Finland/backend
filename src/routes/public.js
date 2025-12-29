@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const { sendRegistrationPendingEmail } = require('../services/emailService');
 const router = express.Router();
 
 let submissions = []; // Temporary storage for submissions
@@ -31,6 +32,27 @@ router.post('/submit-member', async (req, res) => {
     // Add submission to temporary storage
     submissions.push(submission);
     console.log('Submission received:', submission);
+
+
+    // Send confirmation email (non-blocking)
+    sendRegistrationPendingEmail(
+      submission.email,
+      submission.firstName,
+      submission.lastName,
+      submission.city,
+      submission.email,
+      submission.wcaId,
+      submission.birthDate
+    )
+      .then(result => {
+        if (result.success) {
+          console.log(`Pending email sent to ${submission.email}`);
+        } else {
+          console.warn(`Failed to send pending email to ${submission.email}:`, result.reason || result.error);
+        }
+      })
+      .catch(err => console.error('Email send error:', err));
+
     res.status(200).send('Submission received successfully');
   } catch (err) {
     console.error('Error checking database or handling submission:', err);

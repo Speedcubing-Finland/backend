@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const verifyToken = require('../middleware/auth');
 const { submissions } = require('./public'); // Import shared submissions array
+const { sendRegistrationApprovedEmail } = require('../services/emailService');
 const router = express.Router();
 
 // Login endpoint - no auth required
@@ -87,6 +88,22 @@ router.post('/approve', async (req, res) => {
       ]);
   
       console.log('Data saved successfully:', result);
+
+      // Send approval email (non-blocking)
+      sendRegistrationApprovedEmail(
+        approvedSubmission.email,
+        approvedSubmission.firstName,
+        approvedSubmission.lastName
+      )
+        .then(emailResult => {
+          if (emailResult.success) {
+            console.log(`Approval email sent to ${approvedSubmission.email}`);
+          } else {
+            console.warn(`Failed to send approval email to ${approvedSubmission.email}:`, emailResult.reason || emailResult.error);
+          }
+        })
+        .catch(err => console.error('Email send error:', err));
+
       res.status(200).send('Submission approved successfully');
     } catch (err) {
       console.error('Error inserting data into the database:', err);
