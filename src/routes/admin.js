@@ -5,7 +5,11 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const verifyToken = require('../middleware/auth');
 const { submissions } = require('./public'); // Import shared submissions array
-const { sendRegistrationApprovedEmail } = require('../services/emailService');
+const {
+  sendRegistrationApprovedEmail,
+  sendCompetitionAnnouncementEmail,
+} = require('../services/emailService');
+const { runCompetitionNotificationCheck } = require('../services/competitionNotifierService');
 const router = express.Router();
 
 // Login endpoint - no auth required
@@ -144,6 +148,80 @@ router.get('/members', async (req, res) => {
   } catch (err) {
     console.error('Error fetching members:', err);
     res.status(500).send('Error fetching members');
+  }
+});
+
+// Endpoint to manually trigger competition notification check
+router.post('/notify-competitions', async (req, res) => {
+  try {
+    const result = await runCompetitionNotificationCheck({ manual: true });
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('Error running competition notifier:', err);
+    res.status(500).json({ error: 'Error running competition notifier' });
+  }
+});
+
+// Endpoint to send a preview competition email to a single address
+router.post('/notify-competitions-preview', async (req, res) => {
+  const { email, competitionId } = req.body || {};
+
+  if (!email) {
+    return res.status(400).json({ error: 'Missing email in request body' });
+  }
+
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const url = `https://www.worldcubeassociation.org/api/v0/competitions?country_iso2=FI&start=${today}`;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      return res.status(502).json({
+        error: `Failed to fetch competitions from WCA API (${response.status})`,
+      });
+    }
+
+    const competitions = await response.json();
+    if (!Array.isArray(competitions) || competitions.length === 0) {
+      return res.status(404).json({ error: 'No upcoming Finland competitions found' });
+    }
+
+    const selectedCompetition = competitionId
+      ? competitions.find((competition) => competition.id === competitionId)
+      : competitions[0];
+
+    if (!selectedCompetition) {
+      return res.status(404).json({
+        error: `Competition not found for id: ${competitionId}`,
+      });
+    }
+
+    const sendResult = await sendCompetitionAnnouncementEmail(
+      email,
+      'Testikäyttäjä',
+      selectedCompetition
+    );
+
+    if (!sendResult?.success) {
+      return res.status(500).json({
+        error: 'Failed to send preview email',
+        details: sendResult?.reason || sendResult?.error || 'Unknown error',
+      });
+    }
+
+    return res.status(200).json({
+      status: 'ok',
+      to: email,
+      competition: {
+        id: selectedCompetition.id,
+        name: selectedCompetition.name,
+        start_date: selectedCompetition.start_date,
+        end_date: selectedCompetition.end_date,
+      },
+    });
+  } catch (err) {
+    console.error('Error sending preview competition email:', err);
+    return res.status(500).json({ error: 'Error sending preview competition email' });
   }
 });
 

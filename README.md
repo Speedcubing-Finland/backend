@@ -21,6 +21,7 @@ API runs on `http://localhost:3000`
 - CORS enabled for specific origins
 - Public and protected routes
 - Member submission queue system
+- Automatic competition notification emails for new Finland WCA competitions
 
 ## 🛠️ Tech Stack
 
@@ -55,6 +56,13 @@ ADMIN_PASSWORD_HASH=your_bcrypt_hash_here
 
 # Generate with: node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 JWT_SECRET=your_secret_key_here
+
+# Competition Notification Automation (optional)
+COMPETITION_NOTIFY_ENABLED=true
+COMPETITION_NOTIFY_INTERVAL_HOURS=6
+COMPETITION_NOTIFY_START_DELAY_MS=30000
+COMPETITION_NOTIFY_BATCH_SIZE=15
+COMPETITION_NOTIFY_SEED_EXISTING=true
 ```
 
 ### Generate Credentials
@@ -182,6 +190,33 @@ Response:
 ]
 ```
 
+#### Manually Trigger New-Competition Email Check
+```http
+POST /api/admin/notify-competitions
+
+Response:
+{
+  "status": "ok",
+  "newCompetitions": 1,
+  "recipients": 154,
+  "sent": 154,
+  "failed": 0
+}
+```
+
+#### Send Single Preview Competition Email
+```http
+POST /api/admin/notify-competitions-preview
+Content-Type: application/json
+
+{
+  "email": "you@example.com",
+  "competitionId": "KirkkonummiKuutionv%C3%A4%C3%A4ntely2026" // optional
+}
+```
+
+If `competitionId` is omitted, the first upcoming Finland competition is used.
+
 ## 🗄️ Database Schema
 
 ```sql
@@ -194,6 +229,17 @@ CREATE TABLE members (
   birth_date DATE NOT NULL,
   wca_id VARCHAR(10),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE competition_notifications (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  competition_id VARCHAR(64) NOT NULL UNIQUE,
+  competition_name VARCHAR(255) NOT NULL,
+  start_date DATE NULL,
+  end_date DATE NULL,
+  notified_member_count INT NOT NULL DEFAULT 0,
+  failed_member_count INT NOT NULL DEFAULT 0,
+  notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
@@ -226,6 +272,11 @@ CREATE TABLE members (
    - `ADMIN_USERNAME`
    - `ADMIN_PASSWORD_HASH`
    - `JWT_SECRET`
+   - `COMPETITION_NOTIFY_ENABLED`
+   - `COMPETITION_NOTIFY_INTERVAL_HOURS`
+   - `COMPETITION_NOTIFY_START_DELAY_MS`
+   - `COMPETITION_NOTIFY_BATCH_SIZE`
+   - `COMPETITION_NOTIFY_SEED_EXISTING`
 
 3. **Auto-Deploy**
    
