@@ -12,6 +12,8 @@ app.use(cors({
   origin: (origin, callback) => {
     const allowedOrigins = [
       'https://speedcubingfinland.fi',
+      'https://www.speedcubingfinland.fi',
+      'http://localhost:3000',
       'http://localhost:5173'
     ];
     if (!origin || allowedOrigins.includes(origin)) {
