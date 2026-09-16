@@ -73,32 +73,53 @@ router.post('/approve', async (req, res) => {
   const { id } = req.body;
   if (!id) return res.status(400).send('Missing id');
 
+  let connection;
+
   try {
-    // Fetch the pending registration
-    const [rows] = await db.execute('SELECT * FROM pending_members WHERE id = ?', [id]);
-    if (rows.length === 0) return res.status(404).send('Pending registration not found');
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // Fetch the pending registration, locking the row so that concurrent
+    // approvals (e.g. the bulk approve button) cannot process it twice
+    const [rows] = await connection.execute(
+      'SELECT * FROM pending_members WHERE id = ? FOR UPDATE',
+      [id]
+    );
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).send('Pending registration not found');
+    }
     const approvedSubmission = rows[0];
 
     // Check for duplicate in members
-    const [dup] = await db.execute('SELECT COUNT(*) AS count FROM members WHERE email = ?', [approvedSubmission.email]);
-    if (dup[0].count > 0) return res.status(400).send('This email address is already registered');
+    const [dup] = await connection.execute(
+      'SELECT COUNT(*) AS count FROM members WHERE email = ?',
+      [approvedSubmission.email]
+    );
+    if (dup[0].count > 0) {
+      await connection.rollback();
+      return res.status(400).send('This email address is already registered');
+    }
 
-    // Insert into members
+    // Insert into members, keeping the date the application was submitted
     const insertQuery = `
-      INSERT INTO members (first_name, last_name, city, email, wca_id, birth_date)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO members (first_name, last_name, city, email, wca_id, birth_date, submitted_at, approved_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
     `;
-    await db.execute(insertQuery, [
+    await connection.execute(insertQuery, [
       approvedSubmission.first_name,
       approvedSubmission.last_name,
       approvedSubmission.city,
       approvedSubmission.email,
       approvedSubmission.wca_id || null,
-      approvedSubmission.birth_date
+      approvedSubmission.birth_date,
+      approvedSubmission.submitted_at || null
     ]);
 
     // Remove from pending_members
-    await db.execute('DELETE FROM pending_members WHERE id = ?', [id]);
+    await connection.execute('DELETE FROM pending_members WHERE id = ?', [id]);
+
+    await connection.commit();
 
     // (Optional) Send approval email (non-blocking)
     if (sendRegistrationApprovedEmail) {
@@ -119,8 +140,17 @@ router.post('/approve', async (req, res) => {
 
     res.status(200).send('Submission approved successfully');
   } catch (err) {
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (rollbackErr) {
+        console.error('Error rolling back approval:', rollbackErr);
+      }
+    }
     console.error('Error approving registration:', err);
     res.status(500).send('Error approving registration');
+  } finally {
+    if (connection) connection.release();
   }
 });
 
@@ -143,13 +173,81 @@ router.post('/reject', async (req, res) => {
 // Endpoint to get all members (for comparison)
 router.get('/members', async (req, res) => {
   try {
-    const [rows] = await db.execute('SELECT wca_id, email, first_name, last_name FROM members');
+    const [rows] = await db.execute(
+      `SELECT id, first_name, last_name, city, email, wca_id, birth_date,
+              submitted_at, approved_at, edited_at
+       FROM members`
+    );
     res.status(200).json(rows);
   } catch (err) {
     console.error('Error fetching members:', err);
     res.status(500).send('Error fetching members');
   }
 });
+
+// Endpoint to update a member by id
+router.put('/members/:id', async (req, res) => {
+  const { id } = req.params;
+  const { first_name, last_name, city, email, wca_id, birth_date } = req.body || {};
+
+  const clean = (value) => (typeof value === 'string' ? value.trim() : '');
+  const member = {
+    first_name: clean(first_name),
+    last_name: clean(last_name),
+    city: clean(city),
+    email: clean(email),
+    birth_date: clean(birth_date),
+    wca_id: clean(wca_id) || null
+  };
+
+  const missing = ['first_name', 'last_name', 'city', 'email', 'birth_date']
+    .filter((field) => !member[field]);
+  if (missing.length > 0) {
+    return res.status(400).send('All required fields must be filled.');
+  }
+
+  try {
+    const [existing] = await db.execute('SELECT id FROM members WHERE id = ?', [id]);
+    if (existing.length === 0) return res.status(404).send('Member not found');
+
+    // The member keeps its own email, so exclude it from the duplicate check
+    const [dup] = await db.execute(
+      'SELECT COUNT(*) AS count FROM members WHERE email = ? AND id != ?',
+      [member.email, id]
+    );
+    if (dup[0].count > 0) {
+      return res.status(400).send('This email address is already registered');
+    }
+
+    const updateQuery = `
+      UPDATE members
+      SET first_name = ?, last_name = ?, city = ?, email = ?, wca_id = ?, birth_date = ?, edited_at = NOW()
+      WHERE id = ?
+    `;
+    await db.execute(updateQuery, [
+      member.first_name,
+      member.last_name,
+      member.city,
+      member.email,
+      member.wca_id,
+      member.birth_date,
+      id
+    ]);
+
+    const [updated] = await db.execute(
+      `SELECT id, first_name, last_name, city, email, wca_id, birth_date,
+              submitted_at, approved_at, edited_at
+       FROM members WHERE id = ?`,
+      [id]
+    );
+
+    res.status(200).json(updated[0]);
+  } catch (err) {
+    console.error('Error updating member:', err);
+    res.status(500).send('Error updating member');
+  }
+});
+
 
 // Endpoint to manually trigger competition notification check
 router.post('/notify-competitions', async (req, res) => {
