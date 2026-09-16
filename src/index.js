@@ -27,13 +27,25 @@ app.use(cors({
 
 app.use(express.json());
 
+// Health check, also used by the test suite
+app.get('/', (req, res) => {
+  res.send('Hello from Speedcubing Finland backend!');
+});
+
 app.use('/api', publicRoutes);
 app.use('/api/admin', adminRoutes);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  if (process.env.NODE_ENV !== 'test') {
-    startCompetitionNotifier();
-  }
-});
+
+// Only listen when started directly (npm start). Importing the app - as the
+// tests do - must not open a port or start the notifier.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    if (process.env.NODE_ENV !== 'test') {
+      startCompetitionNotifier();
+    }
+  });
+}
+
+module.exports = app;

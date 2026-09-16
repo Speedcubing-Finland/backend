@@ -11,28 +11,23 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10, // Maximum number of connections in the pool
   queueLimit: 0, // Unlimited queue
+  // Return DATE/DATETIME/TIMESTAMP columns as strings. Converting them to JS
+  // Date objects makes the value depend on the timezone of whichever machine
+  // runs the backend, which shifts dates by a day between local and Render.
+  dateStrings: true,
 });
 
+// Verify the pool can reach the database, but do not treat a failure as fatal:
+// a transient outage used to exit the process, which left Render serving a dead
+// container until someone restarted it by hand.
 pool.getConnection((err, connection) => {
   if (err) {
-    console.error('Error connecting to the database:', err);
-    process.exit(1); // Exit process if connection fails
+    console.error('Error connecting to the database:', err.code || err.message);
+    return;
   }
-  if (connection) connection.release(); // Release the initial connection back to the pool
-  console.log('Connected to the database pool');
 
-  // Debug: Log tables and pending_members contents
-  pool.promise().query('SHOW TABLES')
-    .then(([tables]) => {
-      console.log('Tables in database:', tables);
-      return pool.promise().query('SELECT * FROM pending_members LIMIT 1');
-    })
-    .then(([rows]) => {
-      console.log('First row in pending_members:', rows);
-    })
-    .catch((err) => {
-      console.error('Debug query error:', err);
-    });
+  connection.release();
+  console.log('Connected to the database pool');
 });
 
 module.exports = pool.promise(); // Export a promise-based pool

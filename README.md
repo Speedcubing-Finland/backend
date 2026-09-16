@@ -190,6 +190,27 @@ Response:
 ]
 ```
 
+
+#### Update a Member
+```http
+PUT /api/admin/members/:id
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "first_name": "John",
+  "last_name": "Doe",
+  "city": "Helsinki",
+  "email": "john@example.com",
+  "birth_date": "2001-07-11",
+  "wca_id": "2023DOEJ01"
+}
+```
+
+Updates the member and sets `edited_at`. Returns the updated member. Responds
+400 if a required field is missing or the email belongs to another member, 404
+if the member does not exist.
+
 #### Manually Trigger New-Competition Email Check
 ```http
 POST /api/admin/notify-competitions
@@ -224,11 +245,13 @@ CREATE TABLE members (
   id INT AUTO_INCREMENT PRIMARY KEY,
   first_name VARCHAR(100) NOT NULL,
   last_name VARCHAR(100) NOT NULL,
-  email VARCHAR(255) UNIQUE NOT NULL,
+  email VARCHAR(100) UNIQUE NOT NULL,
   city VARCHAR(100) NOT NULL,
   birth_date DATE NOT NULL,
-  wca_id VARCHAR(10),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  wca_id VARCHAR(50),
+  submitted_at TIMESTAMP NULL DEFAULT NULL,  -- when the application was sent
+  approved_at  TIMESTAMP NULL DEFAULT NULL,  -- when an admin approved it
+  edited_at    TIMESTAMP NULL DEFAULT NULL   -- when an admin last edited the row
 );
 
 CREATE TABLE competition_notifications (
