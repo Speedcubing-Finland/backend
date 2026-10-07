@@ -72,5 +72,24 @@ router.post('/submit-member', async (req, res) => {
   }
 });
 
+// Public endpoint for announcements shown on the site.
+// Only published announcements that have not expired are visible; drafts and
+// past meetings disappear on their own so the front page needs no tidying.
+router.get('/announcements', async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT id, type, title, body, meeting_at, location, published_at
+       FROM announcements
+       WHERE published_at IS NOT NULL
+         AND (expires_at IS NULL OR expires_at > NOW())
+       ORDER BY published_at DESC`
+    );
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Error fetching announcements:', err);
+    res.status(500).send('Error fetching announcements');
+  }
+});
+
 // Export both router and submissions array so admin routes can access it
 module.exports = { router };
