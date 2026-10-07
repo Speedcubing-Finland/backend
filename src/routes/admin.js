@@ -185,26 +185,90 @@ router.get('/members', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Shared reading and validation for member and application details
+// ---------------------------------------------------------------------------
+
+// A WCA ID is four digits, four letters and two digits, e.g. 2024KULP03.
+const WCA_ID_PATTERN = /^\d{4}[A-Z]{4}\d{2}$/;
+
+const readPerson = (body = {}) => {
+  const clean = (value) => (typeof value === 'string' ? value.trim() : '');
+  return {
+    first_name: clean(body.first_name),
+    last_name: clean(body.last_name),
+    city: clean(body.city),
+    email: clean(body.email),
+    birth_date: clean(body.birth_date),
+    // Normalised before validation so a stray space or lower case is fixed
+    // rather than rejected
+    wca_id: clean(body.wca_id).toUpperCase() || null
+  };
+};
+
+const validatePerson = (person) => {
+  const missing = ['first_name', 'last_name', 'city', 'email', 'birth_date']
+    .filter((field) => !person[field]);
+  if (missing.length > 0) return 'All required fields must be filled.';
+
+  if (person.wca_id && !WCA_ID_PATTERN.test(person.wca_id)) {
+    return 'WCA ID must look like 2024KULP03, or be left empty';
+  }
+  return null;
+};
+
+
+// Endpoint to correct a waiting application before it is approved
+router.put('/submissions/:id', async (req, res) => {
+  const { id } = req.params;
+  const person = readPerson(req.body);
+  const problem = validatePerson(person);
+  if (problem) return res.status(400).send(problem);
+
+  try {
+    const [rows] = await db.execute('SELECT * FROM pending_members WHERE id = ?', [id]);
+    if (rows.length === 0) return res.status(404).send('Pending registration not found');
+
+    // The address has to be free in both tables: a clash with an existing
+    // member would otherwise only surface when the application is approved
+    const [dupMember] = await db.execute(
+      'SELECT COUNT(*) AS count FROM members WHERE email = ?',
+      [person.email]
+    );
+    if (dupMember[0].count > 0) {
+      return res.status(400).send('This email address is already registered');
+    }
+
+    const [dupPending] = await db.execute(
+      'SELECT COUNT(*) AS count FROM pending_members WHERE email = ? AND id != ?',
+      [person.email, id]
+    );
+    if (dupPending[0].count > 0) {
+      return res.status(400).send('Another pending application uses this email address');
+    }
+
+    await db.execute(
+      `UPDATE pending_members
+       SET first_name = ?, last_name = ?, city = ?, email = ?, wca_id = ?, birth_date = ?
+       WHERE id = ?`,
+      [person.first_name, person.last_name, person.city, person.email, person.wca_id, person.birth_date, id]
+    );
+
+    const [updated] = await db.execute('SELECT * FROM pending_members WHERE id = ?', [id]);
+    res.status(200).json(updated[0]);
+  } catch (err) {
+    console.error('Error updating pending registration:', err);
+    res.status(500).send('Error updating pending registration');
+  }
+});
+
+
 // Endpoint to update a member by id
 router.put('/members/:id', async (req, res) => {
   const { id } = req.params;
-  const { first_name, last_name, city, email, wca_id, birth_date } = req.body || {};
-
-  const clean = (value) => (typeof value === 'string' ? value.trim() : '');
-  const member = {
-    first_name: clean(first_name),
-    last_name: clean(last_name),
-    city: clean(city),
-    email: clean(email),
-    birth_date: clean(birth_date),
-    wca_id: clean(wca_id) || null
-  };
-
-  const missing = ['first_name', 'last_name', 'city', 'email', 'birth_date']
-    .filter((field) => !member[field]);
-  if (missing.length > 0) {
-    return res.status(400).send('All required fields must be filled.');
-  }
+  const member = readPerson(req.body);
+  const problem = validatePerson(member);
+  if (problem) return res.status(400).send(problem);
 
   try {
     const [existing] = await db.execute('SELECT id FROM members WHERE id = ?', [id]);
