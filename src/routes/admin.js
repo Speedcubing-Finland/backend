@@ -249,6 +249,153 @@ router.put('/members/:id', async (req, res) => {
 });
 
 
+// ---------------------------------------------------------------------------
+// Announcements (news and statutory meeting invitations)
+// ---------------------------------------------------------------------------
+
+const ANNOUNCEMENT_TYPES = ['meeting_invitation', 'news'];
+
+const readAnnouncement = (body = {}) => {
+  const clean = (value) => (typeof value === 'string' ? value.trim() : '');
+  return {
+    type: ANNOUNCEMENT_TYPES.includes(body.type) ? body.type : 'news',
+    title: clean(body.title),
+    body: clean(body.body),
+    meeting_at: clean(body.meeting_at) || null,
+    location: clean(body.location) || null
+  };
+};
+
+const validateAnnouncement = (announcement) => {
+  if (!announcement.title || !announcement.body) {
+    return 'Title and body are required';
+  }
+  // Under the Associations Act an invitation must state when and where the
+  // meeting is held, so these are required for invitations specifically.
+  if (announcement.type === 'meeting_invitation' && (!announcement.meeting_at || !announcement.location)) {
+    return 'A meeting invitation must state the meeting time and location';
+  }
+  return null;
+};
+
+// A meeting notice stays visible until the day after the meeting
+const expiryFromMeeting = (meetingAt) => {
+  if (!meetingAt) return null;
+  const meeting = new Date(`${meetingAt}`.replace(' ', 'T'));
+  if (Number.isNaN(meeting.getTime())) return null;
+  meeting.setDate(meeting.getDate() + 1);
+  const pad = (n) => `${n}`.padStart(2, '0');
+  return `${meeting.getFullYear()}-${pad(meeting.getMonth() + 1)}-${pad(meeting.getDate())} ` +
+    `${pad(meeting.getHours())}:${pad(meeting.getMinutes())}:${pad(meeting.getSeconds())}`;
+};
+
+const ANNOUNCEMENT_COLUMNS = `id, type, title, body, meeting_at, location,
+       published_at, expires_at, emailed_at, emailed_count, created_at, edited_at`;
+
+const fetchAnnouncement = async (id) => {
+  const [rows] = await db.execute(
+    `SELECT ${ANNOUNCEMENT_COLUMNS} FROM announcements WHERE id = ?`,
+    [id]
+  );
+  return rows[0] || null;
+};
+
+// List every announcement, drafts included
+router.get('/announcements', async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT ${ANNOUNCEMENT_COLUMNS} FROM announcements ORDER BY created_at DESC`
+    );
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Error fetching announcements:', err);
+    res.status(500).send('Error fetching announcements');
+  }
+});
+
+// Create a draft. Publishing is a separate, deliberate action.
+router.post('/announcements', async (req, res) => {
+  const announcement = readAnnouncement(req.body);
+  const problem = validateAnnouncement(announcement);
+  if (problem) return res.status(400).send(problem);
+
+  try {
+    const [result] = await db.execute(
+      `INSERT INTO announcements (type, title, body, meeting_at, location)
+       VALUES (?, ?, ?, ?, ?)`,
+      [announcement.type, announcement.title, announcement.body, announcement.meeting_at, announcement.location]
+    );
+    const created = await fetchAnnouncement(result.insertId);
+    res.status(201).json(created);
+  } catch (err) {
+    console.error('Error creating announcement:', err);
+    res.status(500).send('Error creating announcement');
+  }
+});
+
+// Edit an announcement. published_at is deliberately absent from this query:
+// it is evidence of when the notice period started and must never move.
+router.put('/announcements/:id', async (req, res) => {
+  const { id } = req.params;
+  const announcement = readAnnouncement(req.body);
+  const problem = validateAnnouncement(announcement);
+  if (problem) return res.status(400).send(problem);
+
+  try {
+    const existing = await fetchAnnouncement(id);
+    if (!existing) return res.status(404).send('Announcement not found');
+
+    await db.execute(
+      `UPDATE announcements
+       SET type = ?, title = ?, body = ?, meeting_at = ?, location = ?, edited_at = NOW()
+       WHERE id = ?`,
+      [announcement.type, announcement.title, announcement.body, announcement.meeting_at, announcement.location, id]
+    );
+
+    res.status(200).json(await fetchAnnouncement(id));
+  } catch (err) {
+    console.error('Error updating announcement:', err);
+    res.status(500).send('Error updating announcement');
+  }
+});
+
+// Publish. Writes the publication date once and refuses to do it twice.
+router.post('/announcements/:id/publish', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const existing = await fetchAnnouncement(id);
+    if (!existing) return res.status(404).send('Announcement not found');
+    if (existing.published_at) {
+      return res.status(409).send('Already published; the publication date cannot be changed');
+    }
+
+    const expiresAt = expiryFromMeeting(existing.meeting_at);
+    await db.execute(
+      'UPDATE announcements SET published_at = NOW(), expires_at = ? WHERE id = ?',
+      [expiresAt, id]
+    );
+
+    res.status(200).json(await fetchAnnouncement(id));
+  } catch (err) {
+    console.error('Error publishing announcement:', err);
+    res.status(500).send('Error publishing announcement');
+  }
+});
+
+router.delete('/announcements/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [result] = await db.execute('DELETE FROM announcements WHERE id = ?', [id]);
+    if (result.affectedRows === 0) return res.status(404).send('Announcement not found');
+    res.status(200).send('Announcement deleted');
+  } catch (err) {
+    console.error('Error deleting announcement:', err);
+    res.status(500).send('Error deleting announcement');
+  }
+});
+
+
 // Endpoint to manually trigger competition notification check
 router.post('/notify-competitions', async (req, res) => {
   try {
