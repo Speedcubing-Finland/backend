@@ -6,7 +6,7 @@ jest.mock('../src/services/emailService', () => ({
 
 const db = require('../src/db');
 const { sendCompetitionAnnouncementEmail } = require('../src/services/emailService');
-const { enqueueEmails, processEmailQueue } = require('../src/services/emailQueueService');
+const { enqueueEmails, processEmailQueue, startEmailQueueWorker } = require('../src/services/emailQueueService');
 
 const QUEUED = {
   id: 1,
@@ -30,10 +30,12 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.spyOn(console, 'error').mockImplementation(() => {});
   jest.spyOn(console, 'log').mockImplementation(() => {});
-  state = { statements: [], due: [QUEUED] };
+  state = { statements: [], due: [QUEUED], lockAvailable: true };
 
   db.query.mockImplementation(async (sql, params) => {
     record(sql, params);
+    if (/GET_LOCK/i.test(sql)) return [[{ got_lock: state.lockAvailable ? 1 : 0 }]];
+    if (/RELEASE_LOCK/i.test(sql)) return [[{ released: 1 }]];
     if (/SELECT/i.test(sql)) return [state.due];
     return [{ affectedRows: 1 }];
   });
@@ -122,6 +124,22 @@ describe('processEmailQueue', () => {
     expect(find(/UPDATE email_queue SET attempts/i).sql).toMatch(/status = 'failed'/i);
   });
 
+  it('does not run while another worker holds the lock', async () => {
+    state.lockAvailable = false;
+
+    const result = await processEmailQueue({ limit: 5 });
+
+    // Two workers selecting the same pending rows would send them twice
+    expect(sendCompetitionAnnouncementEmail).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ processed: 0, reason: 'locked' });
+  });
+
+  it('releases the lock when the run finishes', async () => {
+    await processEmailQueue({ limit: 5 });
+
+    expect(find(/RELEASE_LOCK/i)).toBeTruthy();
+  });
+
   it('reports when the queue is empty', async () => {
     state.due = [];
 
@@ -129,5 +147,30 @@ describe('processEmailQueue', () => {
 
     expect(result).toMatchObject({ sent: 0, failed: 0, processed: 0 });
     expect(sendCompetitionAnnouncementEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe('startEmailQueueWorker', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('drains the queue on a timer so delivery does not depend on cron', async () => {
+    jest.useFakeTimers();
+
+    const handle = startEmailQueueWorker();
+    expect(handle).toBeTruthy();
+
+    jest.advanceTimersByTime(5 * 60 * 1000);
+    await Promise.resolve();
+
+    expect(db.query).toHaveBeenCalled();
+    clearInterval(handle);
+  });
+
+  it('can be turned off', () => {
+    process.env.EMAIL_QUEUE_IN_APP = 'false';
+    const handle = startEmailQueueWorker();
+    delete process.env.EMAIL_QUEUE_IN_APP;
+
+    expect(handle).toBeNull();
   });
 });
