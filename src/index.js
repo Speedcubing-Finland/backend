@@ -4,6 +4,7 @@ const cors = require('cors');
 const adminRoutes = require('./routes/admin');
 const { router: publicRoutes } = require('./routes/public');
 const { startCompetitionNotifier } = require('./services/competitionNotifierService');
+const { startEmailQueueWorker } = require('./services/emailQueueService');
 
 const app = express();
 
@@ -44,6 +45,7 @@ if (require.main === module) {
     console.log(`Server running on port ${PORT}`);
     if (process.env.NODE_ENV !== 'test') {
       startCompetitionNotifier();
+      startEmailQueueWorker();
     }
   });
 }
