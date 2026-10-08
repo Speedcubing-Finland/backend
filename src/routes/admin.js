@@ -181,7 +181,7 @@ router.get('/members', async (req, res) => {
   try {
     const [rows] = await db.execute(
       `SELECT id, first_name, last_name, city, email, wca_id, birth_date,
-              submitted_at, approved_at, edited_at
+              submitted_at, approved_at, edited_at, competition_emails
        FROM members`
     );
     res.status(200).json(rows);
@@ -289,9 +289,15 @@ router.put('/members/:id', async (req, res) => {
       return res.status(400).send('This email address is already registered');
     }
 
+    // The subscription is only touched when the request actually carries it,
+    // so editing a city can never silently resubscribe someone
+    const consentSent = typeof req.body?.competition_emails === 'boolean';
+    const consentColumn = consentSent ? ', competition_emails = ?' : '';
+    const consentValue = consentSent ? [req.body.competition_emails ? 1 : 0] : [];
+
     const updateQuery = `
       UPDATE members
-      SET first_name = ?, last_name = ?, city = ?, email = ?, wca_id = ?, birth_date = ?, edited_at = NOW()
+      SET first_name = ?, last_name = ?, city = ?, email = ?, wca_id = ?, birth_date = ?${consentColumn}, edited_at = NOW()
       WHERE id = ?
     `;
     await db.execute(updateQuery, [
@@ -301,12 +307,13 @@ router.put('/members/:id', async (req, res) => {
       member.email,
       member.wca_id,
       member.birth_date,
+      ...consentValue,
       id
     ]);
 
     const [updated] = await db.execute(
       `SELECT id, first_name, last_name, city, email, wca_id, birth_date,
-              submitted_at, approved_at, edited_at
+              submitted_at, approved_at, edited_at, competition_emails
        FROM members WHERE id = ?`,
       [id]
     );

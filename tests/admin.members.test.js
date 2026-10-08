@@ -204,6 +204,24 @@ describe('PUT /api/admin/members/:id', () => {
     expect(all(/UPDATE members/i)).toHaveLength(0);
   });
 
+  it('lets an admin turn competition emails off for a member', async () => {
+    const res = await request(app)
+      .put('/api/admin/members/42')
+      .send({ ...VALID_EDIT, competition_emails: false });
+
+    expect(res.statusCode).toBe(200);
+    const update = find(/UPDATE members/i);
+    expect(update.sql).toMatch(/competition_emails = \?/i);
+    expect(update.params).toContain(0);
+  });
+
+  it('leaves the subscription alone when the field is not sent', async () => {
+    const res = await request(app).put('/api/admin/members/42').send(VALID_EDIT);
+
+    expect(res.statusCode).toBe(200);
+    expect(find(/UPDATE members/i).sql).not.toMatch(/competition_emails/i);
+  });
+
   it('stores an empty WCA ID as null', async () => {
     const res = await request(app).put('/api/admin/members/42').send({ ...VALID_EDIT, wca_id: '' });
 
