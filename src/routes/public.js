@@ -30,9 +30,13 @@ router.post('/submit-member', async (req, res) => {
     }
 
     // Save submission to pending_members table
+    // Consent is only recorded when the form actually sends it: an unticked
+    // box, an old cached form or a malformed request all mean "no"
+    const competitionEmails = submission.competitionEmails === true ? 1 : 0;
+
     const insertQuery = `
-      INSERT INTO pending_members (first_name, last_name, city, email, wca_id, birth_date)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO pending_members (first_name, last_name, city, email, wca_id, birth_date, competition_emails)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
     await db.execute(insertQuery, [
       submission.firstName,
@@ -40,7 +44,8 @@ router.post('/submit-member', async (req, res) => {
       submission.city,
       submission.email,
       submission.wcaId || null,
-      submission.birthDate
+      submission.birthDate,
+      competitionEmails
     ]);
     console.log('Submission saved to pending_members:', submission);
 
@@ -71,6 +76,41 @@ router.post('/submit-member', async (req, res) => {
     res.status(500).send('Error checking for duplicate email or saving submission.');
   }
 });
+
+// ---------------------------------------------------------------------------
+// Unsubscribing from competition announcements
+//
+// Keyed by a 128-bit random token, so the link in an email works without a
+// login and cannot be guessed or enumerated.
+// ---------------------------------------------------------------------------
+
+const setCompetitionEmails = async (req, res, subscribed) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  if (!token) return res.status(400).send('Missing token');
+
+  try {
+    const [result] = await db.execute(
+      `UPDATE members SET competition_emails = ${subscribed ? 1 : 0} WHERE unsubscribe_token = ?`,
+      [token]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(404).send('Tuntematon linkki');
+    }
+
+    const [rows] = await db.execute(
+      'SELECT first_name FROM members WHERE unsubscribe_token = ?',
+      [token]
+    );
+
+    res.status(200).json({ subscribed, first_name: rows[0]?.first_name || null });
+  } catch (err) {
+    console.error('Error changing competition email subscription:', err);
+    res.status(500).send('Error changing subscription');
+  }
+};
+
+router.post('/unsubscribe', (req, res) => setCompetitionEmails(req, res, false));
+router.post('/resubscribe', (req, res) => setCompetitionEmails(req, res, true));
 
 // Public endpoint for announcements shown on the site.
 // Only published announcements that have not expired are visible; drafts and

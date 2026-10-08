@@ -1,5 +1,6 @@
 
 const express = require('express');
+const crypto = require('crypto');
 const db = require('../db'); // Ensure the path is correct
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -103,8 +104,9 @@ router.post('/approve', async (req, res) => {
 
     // Insert into members, keeping the date the application was submitted
     const insertQuery = `
-      INSERT INTO members (first_name, last_name, city, email, wca_id, birth_date, submitted_at, approved_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+      INSERT INTO members (first_name, last_name, city, email, wca_id, birth_date,
+                           submitted_at, approved_at, competition_emails, unsubscribe_token)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)
     `;
     await connection.execute(insertQuery, [
       approvedSubmission.first_name,
@@ -113,7 +115,11 @@ router.post('/approve', async (req, res) => {
       approvedSubmission.email,
       approvedSubmission.wca_id || null,
       approvedSubmission.birth_date,
-      approvedSubmission.submitted_at || null
+      approvedSubmission.submitted_at || null,
+      approvedSubmission.competition_emails ? 1 : 0,
+      // Every member gets a token at creation, so an unsubscribe link can be
+      // built for any email without a second write
+      crypto.randomBytes(16).toString('hex')
     ]);
 
     // Remove from pending_members

@@ -1,10 +1,12 @@
 const db = require('../db');
+const { enqueueEmails } = require('./emailQueueService');
 const {
   sendCompetitionAnnouncementEmail,
   isEmailConfigured,
 } = require('./emailService');
 
 const LOCK_NAME = 'competition_notifications_lock';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://www.speedcubingfinland.fi';
 const COUNTRY_ISO2 = 'FI';
 
 const parsePositiveInt = (value, fallback) => {
@@ -128,40 +130,39 @@ const seedExistingCompetitionsAsNotified = async (competitions) => {
 };
 
 const getMemberRecipients = async () => {
+  // Only members who consented. Everyone else is simply not a recipient.
   const [rows] = await db.execute(`
-    SELECT email, first_name
+    SELECT email, first_name, unsubscribe_token
     FROM members
     WHERE email IS NOT NULL AND TRIM(email) <> ''
+      AND competition_emails = 1
   `);
   return rows;
 };
 
-const sendCompetitionAnnouncementToMembers = async (competition, recipients) => {
-  let successCount = 0;
-  let failedCount = 0;
+/**
+ * Hand the announcement to the queue instead of sending it here.
+ *
+ * Sending inline is what lost 138 of 213 recipients on every run: one SMTP
+ * connection per message, no retry, and no record of who missed out. The
+ * dedupe key makes re-queueing the same announcement a no-op.
+ */
+const queueCompetitionAnnouncement = async (competition, recipients) => {
+  const messages = recipients.map((recipient) => ({
+    recipient_email: recipient.email,
+    recipient_name: recipient.first_name,
+    template: 'competition_announcement',
+    payload: {
+      competition,
+      unsubscribeUrl: recipient.unsubscribe_token
+        ? `${FRONTEND_URL}/unsubscribe?token=${recipient.unsubscribe_token}`
+        : null,
+    },
+    dedupe_key: `competition:${competition.id}:${recipient.email}`.slice(0, 191),
+  }));
 
-  for (let index = 0; index < recipients.length; index += BATCH_SIZE) {
-    const batch = recipients.slice(index, index + BATCH_SIZE);
-    const batchResults = await Promise.allSettled(
-      batch.map((recipient) =>
-        sendCompetitionAnnouncementEmail(
-          recipient.email,
-          recipient.first_name || 'speedcuber',
-          competition
-        )
-      )
-    );
-
-    batchResults.forEach((result) => {
-      if (result.status === 'fulfilled' && result.value?.success) {
-        successCount += 1;
-      } else {
-        failedCount += 1;
-      }
-    });
-  }
-
-  return { successCount, failedCount };
+  const { queued } = await enqueueEmails(messages);
+  return { queuedCount: queued, recipientCount: messages.length };
 };
 
 const runCompetitionNotificationCheck = async ({ manual = false } = {}) => {
@@ -220,27 +221,29 @@ const runCompetitionNotificationCheck = async ({ manual = false } = {}) => {
     const processedCompetitions = [];
 
     for (const competition of newCompetitions) {
-      const { successCount, failedCount } =
-        await sendCompetitionAnnouncementToMembers(competition, recipients);
+      const { queuedCount, recipientCount } =
+        await queueCompetitionAnnouncement(competition, recipients);
 
-      totalSent += successCount;
-      totalFailed += failedCount;
+      totalSent += queuedCount;
+      totalFailed += recipientCount - queuedCount;
       processedCompetitions.push({
         id: competition.id,
         name: competition.name,
-        sent: successCount,
-        failed: failedCount,
+        queued: queuedCount,
+        recipients: recipientCount,
       });
 
-      await saveNotificationResult(competition, successCount, failedCount);
+      // The count recorded here is what was queued; actual delivery is
+      // visible per recipient in email_queue
+      await saveNotificationResult(competition, queuedCount, recipientCount - queuedCount);
     }
 
     return {
       status: 'ok',
       newCompetitions: newCompetitions.length,
       recipients: recipients.length,
-      sent: totalSent,
-      failed: totalFailed,
+      queued: totalSent,
+      notQueued: totalFailed,
       competitions: processedCompetitions,
     };
   } catch (error) {
