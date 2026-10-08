@@ -1,9 +1,18 @@
 const nodemailer = require('nodemailer');
 const sgMail = require('@sendgrid/mail');
 
-// Create reusable transporter object using SMTP
-const createTransporter = () => {
-  return nodemailer.createTransport({
+// One pooled transporter for the whole process.
+//
+// This used to build a fresh transport - and therefore a fresh SMTP
+// connection - for every single message. Sending to 213 members opened 213
+// connections as fast as the loop ran, and the host throttled it dead at 75
+// every time. A pool holds one connection open, reuses it, and paces itself.
+let pooledTransporter = null;
+
+const getTransporter = () => {
+  if (pooledTransporter) return pooledTransporter;
+
+  pooledTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
   port: parseInt(process.env.SMTP_PORT) || 587,
   secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
@@ -15,7 +24,14 @@ const createTransporter = () => {
   connectionTimeout: 20000,
   greetingTimeout: 20000,
   socketTimeout: 20000,
+  pool: true,
+  maxConnections: 1,      // one connection, reused
+  maxMessages: 50,        // recycle it periodically rather than running forever
+  rateDelta: 1000,
+  rateLimit: 1,           // at most one message per second
   });
+
+  return pooledTransporter;
 };
 
 const isEmailConfigured = () => {
@@ -270,7 +286,10 @@ Speedcubing Finland ry
 };
 
 // Send email function
-const sendEmail = async (to, template, ...templateArgs) => {
+const sendEmail = async (to, template, ...templateArgs) =>
+  sendEmailWithOptions(to, template, templateArgs, {});
+
+const sendEmailWithOptions = async (to, template, templateArgs = [], { unsubscribeUrl } = {}) => {
   // Check if email is configured
   // Prefer SendGrid API if configured (better reliability on Render)
   if (process.env.SENDGRID_API_KEY) {
@@ -299,8 +318,21 @@ const sendEmail = async (to, template, ...templateArgs) => {
   }
 
   try {
-    const transporter = createTransporter();
+    const transporter = getTransporter();
     const emailContent = emailTemplates[template](...templateArgs);
+
+    // Bulk mail needs a visible way out, and a header the mail clients read
+    if (unsubscribeUrl) {
+      const link = `<p style="font-size:12px;color:#64748b">` +
+        `Et halua enää ilmoituksia tulevista kilpailuista? ` +
+        `<a href="${unsubscribeUrl}">Peruuta tilaus</a>.</p>`;
+
+      emailContent.html = emailContent.html.includes('</body>')
+        ? emailContent.html.replace('</body>', `${link}</body>`)
+        : `${emailContent.html}${link}`;
+
+      emailContent.text = `${emailContent.text}\n\nPeruuta kilpailuilmoitukset: ${unsubscribeUrl}\n`;
+    }
 
     const mailOptions = {
       from: `"Speedcubing Finland" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
@@ -308,6 +340,7 @@ const sendEmail = async (to, template, ...templateArgs) => {
       subject: emailContent.subject,
       text: emailContent.text,
       html: emailContent.html,
+      ...(unsubscribeUrl ? { headers: { 'List-Unsubscribe': `<${unsubscribeUrl}>` } } : {}),
     };
 
     const info = await transporter.sendMail(mailOptions);
@@ -328,8 +361,13 @@ const sendRegistrationApprovedEmail = (email, firstName, lastName) => {
   return sendEmail(email, 'registrationApproved', firstName, lastName);
 };
 
-const sendCompetitionAnnouncementEmail = (email, firstName, competition) => {
-  return sendEmail(email, 'competitionAnnouncement', firstName, competition);
+const sendCompetitionAnnouncementEmail = (email, firstName, competition, unsubscribeUrl = null) => {
+  return sendEmailWithOptions(
+    email,
+    'competitionAnnouncement',
+    [firstName, competition],
+    { unsubscribeUrl }
+  );
 };
 
 module.exports = {
