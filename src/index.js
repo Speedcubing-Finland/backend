@@ -38,15 +38,24 @@ app.use('/api/admin', adminRoutes);
 
 const PORT = process.env.PORT || 3000;
 
-// Only listen when started directly (npm start). Importing the app - as the
-// tests do - must not open a port or start the notifier.
+// Background work must NOT live inside the require.main guard below.
+//
+// Passenger, which serves this app on Hostinger, does not run this file as
+// the main module: it requires the file and serves the exported app itself.
+// require.main is therefore the Passenger wrapper, the listen callback never
+// fires, and anything started inside it silently never runs in production -
+// which is exactly how the email worker and the competition notifier ended up
+// dead on the server while working perfectly in tests.
+if (process.env.NODE_ENV !== 'test') {
+  startCompetitionNotifier();
+  startEmailQueueWorker();
+}
+
+// Only open a port when started directly (npm start). Requiring the app - as
+// the tests do, and as Passenger does - must not bind one.
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    if (process.env.NODE_ENV !== 'test') {
-      startCompetitionNotifier();
-      startEmailQueueWorker();
-    }
   });
 }
 

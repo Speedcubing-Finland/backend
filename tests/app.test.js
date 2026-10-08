@@ -6,6 +6,11 @@ jest.mock('../src/services/competitionNotifierService', () => ({
   runCompetitionNotificationCheck: jest.fn(),
   startCompetitionNotifier: jest.fn(),
 }));
+jest.mock('../src/services/emailQueueService', () => ({
+  enqueueEmails: jest.fn(),
+  processEmailQueue: jest.fn(),
+  startEmailQueueWorker: jest.fn(),
+}));
 
 const request = require('supertest');
 const app = require('../src/index'); 
@@ -18,4 +23,25 @@ describe('GET /', () => {
   });
 });
 
+describe('background workers', () => {
+  // Passenger does not run src/index.js as the main module: it requires the
+  // file and serves the exported app itself. Anything started inside an
+  // `if (require.main === module)` guard therefore never runs in production.
+  it('start when the app is required rather than run directly', () => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
 
+    try {
+      jest.isolateModules(() => {
+        const queue = require('../src/services/emailQueueService');
+        const notifier = require('../src/services/competitionNotifierService');
+        require('../src/index');
+
+        expect(queue.startEmailQueueWorker).toHaveBeenCalled();
+        expect(notifier.startCompetitionNotifier).toHaveBeenCalled();
+      });
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+  });
+});
